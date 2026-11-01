@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TrendLens</title>
+<style>
+:root{--bg:#eef1f4;--ink:#14202b;--mut:#5d6b78;--card:#fff;--up:#0f8b8d;--dn:#c8423b;--ln:#cfd6dd;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#10171d;--ink:#e6ebef;--mut:#8b99a6;--card:#18222b;--up:#3cc4c6;--dn:#ff7b72;--ln:#2a3844;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,sans-serif;padding:max(18px,env(safe-area-inset-top)) 16px max(24px,env(safe-area-inset-bottom))}
+main{max-width:520px;margin:auto}
+h1{font:700 26px/1 Georgia,serif;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 18px;font-size:14px}
+label{display:block;font-size:13px;color:var(--mut);margin:14px 0 6px}
+select,input{width:100%;padding:12px;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+#hz{display:flex;gap:6px}
+#hz button{flex:1;padding:11px 0;border:1px solid var(--ln);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+#hz button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+#go{width:100%;margin-top:18px;padding:14px;border:0;border-radius:8px;background:var(--up);color:#fff;font:600 17px system-ui}
+#out{margin-top:20px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:10px;padding:16px;margin-bottom:12px}
+.big{font:700 34px/1.1 Georgia,serif}
+.up{color:var(--up)}.dn{color:var(--dn)}
+.num{font-variant-numeric:tabular-nums}
+.row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--ln)}
+.row:last-child{border:0}
+.mut{color:var(--mut);font-size:13px}
+details{margin-top:18px}summary{color:var(--mut)}
+svg{width:100%;height:auto;display:block}
+</style></head><body><main>
+<h1>TrendLens</h1>
+<p class="sub">Currency pair movement analysis and forecast</p>
+<label for="pair">Pair</label><select id="pair"></select>
+<label>Forecast horizon</label><div id="hz"></div>
+<button id="go">Analyse</button>
+<div id="out"></div>
+<details><summary>Settings</summary>
+<label for="td">Twelve Data API key (free at twelvedata.com)</label><input id="td" type="password" autocomplete="off">
+<label for="an">Anthropic API key (optional, adds AI reasoning)</label><input id="an" type="password" autocomplete="off">
+</details>
+<p class="mut" style="margin-top:22px">Forecasts are estimates from indicators and AI reasoning, not advice. v1.0</p>
+</main>
+<script>
+const $=s=>document.querySelector(s),S=localStorage;
+const PAIRS=["EUR/USD","GBP/USD","USD/JPY","AUD/USD","USD/CAD","USD/CHF","NZD/USD","EUR/GBP"];
+const HZ={"1 hour":["5min",12],"2 hours":["15min",8],"4 hours":["1h",4],"1 day":["4h",6]};
+let hz="1 hour";
+$("#pair").innerHTML=PAIRS.map(p=>`<option>${p}</option>`).join("");
+$("#pair").value=S.pair||PAIRS[0];$("#pair").onchange=e=>S.pair=e.target.value;
+$("#hz").innerHTML=Object.keys(HZ).map(k=>`<button data-k="${k}" class="${k==hz?"on":""}">${k}</button>`).join("");
+$("#hz").onclick=e=>{const k=e.target.dataset.k;if(!k)return;hz=k;[...$("#hz").children].forEach(b=>b.classList.toggle("on",b.dataset.k==k))};
+["td","an"].forEach(k=>{$("#"+k).value=S[k]||"";$("#"+k).onchange=e=>S[k]=e.target.value.trim()});
+const ema=(a,p)=>{const k=2/(p+1);let e=a[0];return a.map(v=>e=v*k+e*(1-k))};
+const rsi=(a,p=14)=>{let g=0,l=0;for(let i=a.length-p;i<a.length;i++){const d=a[i]-a[i-1];d>0?g+=d:l-=d}return l?100-100/(1+g/l):100};
+function analyse(c,n){
+ const cl=c.map(x=>x.close),px=cl.at(-1),a=ema(cl,12),b=ema(cl,26),m=a.map((v,i)=>v-b[i]),sg=ema(m,9);
+ const e20=ema(cl,20).at(-1),e50=ema(cl,50).at(-1),r=rsi(cl),h=m.at(-1)-sg.at(-1);
+ const atr=c.slice(-14).reduce((s,x)=>s+x.high-x.low,0)/14;
+ const score=(e20>e50?1:-1)+(h>0?1:-1)+(r>55?1:r<45?-1:0)+(px>e20?.5:-.5);
+ const dir=score>1?"Up":score<-1?"Down":"Sideways",sp=atr*Math.sqrt(n);
+ const t=px+Math.sign(score)*sp*.5*Math.min(1,Math.abs(score)/3.5);
+ return{px,e20,e50,r,h,atr,score,dir,t,lo:t-sp,hi:t+sp,conf:Math.min(85,Math.round(35+Math.abs(score)*13)),cl,n};
+}
+function chart(A){
+ const cl=A.cl.slice(-60),N=cl.length+A.n,W=340,H=150,all=[...cl,A.lo,A.hi],mn=Math.min(...all),mx=Math.max(...all);
+ const X=i=>i/(N-1)*W,Y=v=>H-6-(v-mn)/(mx-mn||1)*(H-12),L=cl.length-1;
+ const col=A.dir=="Down"?"var(--dn)":A.dir=="Up"?"var(--up)":"var(--mut)";
+ return`<svg viewBox="0 0 ${W} ${H}"><polygon points="${X(L)},${Y(A.px)} ${X(N-1)},${Y(A.hi)} ${X(N-1)},${Y(A.lo)}" fill="${col}" opacity=".15"/>
+ <polyline fill="none" stroke="var(--ink)" stroke-width="1.6" points="${cl.map((v,i)=>X(i)+","+Y(v)).join(" ")}"/>
+ <line x1="${X(L)}" y1="${Y(A.px)}" x2="${X(N-1)}" y2="${Y(A.t)}" stroke="${col}" stroke-width="2" stroke-dasharray="5 4"/></svg>`;
+}
+async function ai(pair,A,hzName){
+ const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":S.an,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+ body:JSON.stringify({model:"claude-sonnet-5-5",max_tokens:500,messages:[{role:"user",content:`Forex pair ${pair}. Forecast horizon: ${hzName}. Indicators: price ${A.px}, EMA20 ${A.e20.toFixed(5)}, EMA50 ${A.e50.toFixed(5)}, RSI ${A.r.toFixed(1)}, MACD hist ${A.h.toFixed(6)}, ATR ${A.atr.toFixed(5)}. Last 40 closes: ${A.cl.slice(-40).join(",")}. Reply ONLY JSON: {"direction":"up|down|sideways","confidence":0-100,"target":number,"reason":"two plain sentences"}`}]})});
+ const d=await r.json();if(!r.ok)throw new Error(d.error?.message||"AI request failed");
+ return JSON.parse(d.content[0].text.match(/\{[\s\S]*\}/)[0]);
+}
+$("#go").onclick=async()=>{
+ const out=$("#out"),pair=$("#pair").value,[iv,n]=HZ[hz];
+ if(!S.td){out.innerHTML='<div class="card">Add your Twelve Data API key in Settings first.</div>';return}
+ out.innerHTML='<div class="card mut">Loading prices…</div>';
+ try{
+  const j=await(await fetch(`https://api.twelvedata.com/time_series?symbol=${pair}&interval=${iv}&outputsize=120&apikey=${S.td}`)).json();
+  if(!j.values)throw new Error(j.message||"No price data returned");
+  const c=j.values.reverse().map(v=>({high:+v.high,low:+v.low,close:+v.close})),A=analyse(c,n),d=A.px<20?5:3,f=v=>v.toFixed(d);
+  const cls=A.dir=="Down"?"dn":A.dir=="Up"?"up":"";
+  let html=`<div class="card"><div class="mut">${pair}, next ${hz}</div><div class="big ${cls}">${A.dir}</div>${chart(A)}
+  <div class="row"><span>Now</span><b class="num">${f(A.px)}</b></div>
+  <div class="row"><span>Target</span><b class="num">${f(A.t)}</b></div>
+  <div class="row"><span>Likely range</span><b class="num">${f(A.lo)} – ${f(A.hi)}</b></div>
+  <div class="row"><span>Indicator agreement</span><b>${A.conf}%</b></div>
+  <div class="row"><span>RSI / ATR</span><b class="num">${A.r.toFixed(0)} / ${f(A.atr)}</b></div></div>`;
+  out.innerHTML=html+(S.an?'<div class="card mut">Asking AI…</div>':'<div class="card mut">Add an Anthropic key in Settings for AI reasoning.</div>');
+  if(S.an){let x;try{const g=await ai(pair,A,hz);x=`<div class="card"><b>AI view: ${g.direction}</b> <span class="mut">(${g.confidence}% confidence, target ${(+g.target).toFixed(d)})</span><p style="margin:8px 0 0">${g.reason}</p></div>`}catch(e){x=`<div class="card dn">AI: ${e.message}</div>`}out.innerHTML=html+x}
+ }catch(e){out.innerHTML=`<div class="card dn">${e.message}</div>`}
+};
+</script></body></html>
